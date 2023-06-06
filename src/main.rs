@@ -1,6 +1,6 @@
 use chrono::Utc;
 use hmac::{Hmac, Mac};
-use jwt::VerifyWithKey;
+use jwt::{Header, SignWithKey, Token, VerifyWithKey};
 use regex::Regex;
 use serde::Deserialize;
 use serde_json::Value;
@@ -12,11 +12,40 @@ use std::{
     pin::Pin,
     sync::{Arc, Mutex},
 };
-use supplement::{verify_refresh_token, *};
 use tide::{prelude::*, Next, Request, Response, Result, Server};
 
-mod macros;
-mod supplement;
+macro_rules! get_query {
+    ($query: ident => $key: literal) => {
+        $query
+            .get_key_value($key)
+            .and_then(|(_, v)| Some(v.as_str()))
+            .unwrap_or("")
+    };
+}
+
+macro_rules! get_body_string {
+    ($map: ident => $key: literal) => {
+        match $map.get($key).ok_or(String::from(
+            "Request body incomplete: firstName, lastName, dob and address are required.",
+        ))? {
+            Value::String(val) => Ok(val.as_str().to_string()),
+            _ => Err(String::from(
+                "Request body invalid: firstName, lastName and address must be strings only.",
+            )),
+        }?
+    };
+}
+
+macro_rules! date_from_str {
+    ($iter: ident => $type: ty) => {
+        $iter
+            .next()
+            .and_then(|str| <$type>::from_str_radix(str, 10).ok())
+            .ok_or(String::from(
+                "Invalid input: dob must be a real date in format YYYY-MM-DD.",
+            ))?
+    };
+}
 
 #[derive(Clone)]
 struct UserData {
@@ -745,4 +774,125 @@ async fn post_user_logout(req: Request<State>) -> Result {
         "message": "Token successfully invalidated"
     })
     .into())
+}
+
+pub fn process_query_params(string: String) -> HashMap<String, String> {
+    HashMap::from_iter(string.split('&').filter_map(|tuple| {
+        tuple
+            .split_once('=')
+            .map(|(k, v)| (String::from(k), String::from(v)))
+    }))
+}
+
+pub fn populate_array<T: Clone>(value: T, length: usize) -> Vec<T> {
+    let mut arr = Vec::new();
+    for _ in 0..length {
+        arr.push(value.clone())
+    }
+    arr
+}
+
+pub fn generate_pagination(total: usize, current_page: usize) -> Value {
+    let mut last_page = 0;
+    let mut minus = isize::try_from(total).unwrap();
+    while minus > 0 {
+        last_page += 1;
+        minus -= 100;
+    }
+
+    let prev_page = match current_page - 1 > 0 {
+        true => Some(current_page - 1),
+        false => None,
+    };
+
+    let next_page = match current_page < last_page {
+        true => Some(current_page + 1),
+        false => None,
+    };
+
+    let from = (current_page - 1) * 100;
+
+    let to = if from > total {
+        from
+    } else if total - from > 100 {
+        from + 100
+    } else {
+        total
+    };
+
+    json!({
+        "total": total,
+        "lastPage": last_page,
+        "prevPage": prev_page,
+        "nextPage": next_page,
+        "perPage": 100,
+        "currentPage": current_page,
+        "from": from,
+        "to": to
+    })
+}
+
+pub fn error(status: u16, message: &str) -> tide::Result<Response> {
+    let mut res = Response::new(status);
+    res.set_body(json!({
+        "error": true,
+        "message": message
+    }));
+
+    Ok(res)
+}
+
+pub fn generate_jwt(token_type: &str, data: &BodyLogin) -> String {
+    let key: Hmac<Sha384> = Hmac::new_from_slice(b"key i promise").unwrap();
+
+    let header = Header {
+        algorithm: jwt::AlgorithmType::Hs384,
+        ..Default::default()
+    };
+
+    let expiration_duration = match token_type {
+        "Bearer" => data.bearer_exp.unwrap_or(600),
+        "Refresh" => data.refresh_exp.unwrap_or(600),
+        _ => panic!("token type incorrect value"),
+    };
+
+    let iat = Utc::now().timestamp();
+    let exp = iat + expiration_duration;
+
+    let claims = JWT {
+        token_type: String::from(token_type),
+        iat,
+        exp,
+        email: data.email.clone(),
+    };
+
+    let token = Token::new(header, claims).sign_with_key(&key).unwrap();
+
+    String::from(token.as_str())
+}
+
+pub fn verify_refresh_token(token_string: &String) -> core::result::Result<String, String> {
+    if token_string.is_empty() {
+        return Err(String::from(
+            "Authorization header ('Bearer token') not found",
+        ));
+    }
+
+    let key: Hmac<Sha384> = Hmac::new_from_slice(b"key i promise").unwrap();
+
+    let verify_token: core::result::Result<JWT, jwt::Error> = token_string.verify_with_key(&key);
+
+    if let Ok(token) = verify_token {
+        if token.exp <= Utc::now().timestamp() {
+            return Err(String::from("JWT token has expired"));
+        }
+        Ok(token.email)
+    } else if let Err(err) = verify_token {
+        return Err(String::from(match err {
+            jwt::Error::NoClaimsComponent => "Invalid JWT token",
+            _ => "a random JWT error I guess",
+        }));
+    } else {
+        return Err(String::from("idk man"));
+    }
 }
