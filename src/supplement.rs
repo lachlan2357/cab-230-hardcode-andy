@@ -9,10 +9,9 @@ use tide::{prelude::json, Response};
 use crate::{BodyLogin, JWT};
 
 pub fn process_query_params(string: String) -> HashMap<String, String> {
-    HashMap::from_iter(string.split("&").filter_map(|tuple| {
+    HashMap::from_iter(string.split('&').filter_map(|tuple| {
         tuple
-            .split_once("=")
-            .and_then(|(k, v)| Some((String::from(k), String::from(v))))
+            .split_once('=').map(|(k, v)| (String::from(k), String::from(v)))
     }))
 }
 
@@ -37,7 +36,7 @@ pub fn generate_pagination(total: usize, current_page: usize) -> Value {
         false => None,
     };
 
-    let next_page = match current_page + 1 <= last_page {
+    let next_page = match current_page < last_page {
         true => Some(current_page + 1),
         false => None,
     };
@@ -104,7 +103,7 @@ pub fn generate_jwt(token_type: &str, data: &BodyLogin) -> String {
 }
 
 pub fn verify_refresh_token(token_string: &String) -> Result<String, String> {
-    if token_string.len() == 0 {
+    if token_string.is_empty() {
         return Err(String::from(
             "Authorization header ('Bearer token') not found",
         ));
@@ -118,7 +117,7 @@ pub fn verify_refresh_token(token_string: &String) -> Result<String, String> {
         if token.exp <= Utc::now().timestamp() {
             return Err(String::from("JWT token has expired"));
         }
-        return Ok(token.email);
+        Ok(token.email)
     } else if let Err(err) = verify_token {
         return Err(String::from(match err {
             jwt::Error::NoClaimsComponent => "Invalid JWT token",

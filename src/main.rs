@@ -13,17 +13,10 @@ use std::{
     sync::{Arc, Mutex},
 };
 use supplement::{verify_refresh_token, *};
-use tide::{
-    http::headers::{HeaderName, HeaderValue},
-    prelude::*,
-    Next, Request, Response, Result, Server,
-};
-use tokio;
+use tide::{prelude::*, Next, Request, Response, Result, Server};
 
 mod macros;
 mod supplement;
-
-// const JWT_KEY = Hmac:;from
 
 #[derive(Clone)]
 struct UserData {
@@ -68,12 +61,12 @@ impl TryFrom<Value> for BodyLogin {
         let email = value
             .get("email")
             .and_then(|val| val.as_str())
-            .and_then(|str| Some(String::from(str)));
+            .map(String::from);
 
         let password = value
             .get("password")
             .and_then(|val| val.as_str())
-            .and_then(|str| Some(String::from(str)));
+            .map(String::from);
 
         let bearer_exp = value
             .get("bearerExpiresInSeconds")
@@ -119,7 +112,7 @@ impl TryFrom<Value> for BodyProfile {
             ));
         }
 
-        let mut iter = dob.split("-");
+        let mut iter = dob.split('-');
         let year = date_from_str!(iter => i32);
         let month = date_from_str!(iter => u32);
         let day = date_from_str!(iter => u32);
@@ -193,31 +186,21 @@ async fn main() -> tide::Result<()> {
     Ok(())
 }
 
-fn cors<'a>(
-    mut req: Request<State>,
-    next: Next<'a, State>,
-) -> Pin<Box<dyn Future<Output = Result> + Send + 'a>> {
-    return Box::pin(async {
-        req.insert_header("access-control-allow-origin", "*");
-        Ok(next.run(req).await)
-    });
-}
-
 fn check_auth<'a>(
     mut req: Request<State>,
     next: Next<'a, State>,
 ) -> Pin<Box<dyn Future<Output = Result> + Send + 'a>> {
-    return Box::pin(async {
+    Box::pin(async {
         if let Some(auth) = req.header("Authorization") {
             let (_, bearer_string) = auth
                 .iter()
                 .next()
-                .and_then(|res| Some(res.as_str()))
+                .map(|res| res.as_str())
                 .unwrap_or("")
-                .split_once(" ")
+                .split_once(' ')
                 .unwrap_or(("", ""));
 
-            if bearer_string.len() == 0 {
+            if bearer_string.is_empty() {
                 return error(401, "Authorization header ('Bearer token') not found");
             }
 
@@ -231,7 +214,7 @@ fn check_auth<'a>(
                     return error(401, "Uh oh expired JWT. No hacker pls.");
                 }
                 req.set_ext(token.email);
-                return Ok(next.run(req).await);
+                Ok(next.run(req).await)
             } else if let Err(err) = verify_token {
                 match err {
                     jwt::Error::NoClaimsComponent => return error(401, "Invalid JWT token"),
@@ -241,26 +224,26 @@ fn check_auth<'a>(
                 return error(500, "idk man");
             }
         } else {
-            return error(401, "Authorization header ('Bearer token') not found");
+            error(401, "Authorization header ('Bearer token') not found")
         }
-    });
+    })
 }
 
 fn check_optional_auth<'a>(
     mut req: Request<State>,
     next: Next<'a, State>,
 ) -> Pin<Box<dyn Future<Output = Result> + Send + 'a>> {
-    return Box::pin(async {
+    Box::pin(async {
         if let Some(auth) = req.header("Authorization") {
             let (_, bearer_string) = auth
                 .iter()
                 .next()
-                .and_then(|res| Some(res.as_str()))
+                .map(|res| res.as_str())
                 .unwrap_or("")
-                .split_once(" ")
+                .split_once(' ')
                 .unwrap_or(("", ""));
 
-            if bearer_string.len() == 0 {
+            if bearer_string.is_empty() {
                 return error(401, "Authorization header ('Bearer token') not found");
             }
 
@@ -274,7 +257,7 @@ fn check_optional_auth<'a>(
                     return error(401, "Uh oh expired JWT. No hacker pls.");
                 }
                 req.set_ext(token.email);
-                return Ok(next.run(req).await);
+                Ok(next.run(req).await)
             } else if let Err(err) = verify_token {
                 match err {
                     jwt::Error::NoClaimsComponent => return error(401, "Invalid JWT token"),
@@ -286,7 +269,7 @@ fn check_optional_auth<'a>(
         } else {
             Ok(next.run(req).await)
         }
-    });
+    })
 }
 
 fn check_refresh_token<'a>(
@@ -297,7 +280,7 @@ fn check_refresh_token<'a>(
     let users = lock.users.clone();
     drop(lock);
 
-    return Box::pin(async move {
+    Box::pin(async move {
         let body_json: Value = req.body_json().await.unwrap();
         let refresh_token_opt = body_json.get("refreshToken").and_then(|val| match val {
             Value::String(str) => Some(str.clone()),
@@ -318,19 +301,19 @@ fn check_refresh_token<'a>(
                 }
 
                 req.set_ext(jwt_email);
-                return Ok(next.run(req).await);
+                Ok(next.run(req).await)
             } else if let Err(err) = verify_token_res {
                 return error(401, &err);
             } else {
                 return error(401, "idk man");
             }
         } else {
-            return error(400, "Request body incomplete, refresh token required");
+            error(400, "Request body incomplete, refresh token required")
         }
-    });
+    })
 }
 
-async fn get_fake_swagger(req: Request<State>) -> Result {
+async fn get_fake_swagger(_req: Request<State>) -> Result {
     let fake_swagger = read_to_string("src/fake_swagger.html").unwrap();
     let response = Response::builder(200)
         .header("access-control-allow-origin", "*")
@@ -344,7 +327,7 @@ async fn get_fake_swagger(req: Request<State>) -> Result {
 async fn get_movie_search(req: Request<State>) -> Result {
     let query = process_query_params(String::from(req.url().query().unwrap_or("")));
 
-    if query.len() == 0 {
+    if query.is_empty() {
         let data_array = populate_array(
             json!({
                 "title": "Kate & Leopold",
@@ -360,11 +343,11 @@ async fn get_movie_search(req: Request<State>) -> Result {
 
         let pagination = generate_pagination(12184, 1);
 
-        return Ok(json!({
+        Ok(json!({
             "data": data_array,
             "pagination": pagination
         })
-        .into());
+        .into())
     } else {
         let title = get_query!(query => "title");
         let year = get_query!(query => "year");
@@ -387,20 +370,20 @@ async fn get_movie_search(req: Request<State>) -> Result {
 
                 let pagination = generate_pagination(542, 1);
 
-                return Ok(json!({
+                Ok(json!({
                     "data": data_array,
                     "pagination": pagination
                 })
-                .into());
+                .into())
             }
             (_, "1984", _, _) => {
                 let pagination = generate_pagination(0, 1);
 
-                return Ok(json!({
+                Ok(json!({
                     "data": [],
                     "pagination": pagination
                 })
-                .into());
+                .into())
             }
             (_, _, _, "year=2014a") => {
                 let mut res = Response::new(400);
@@ -426,11 +409,11 @@ async fn get_movie_search(req: Request<State>) -> Result {
 
                 let pagination = generate_pagination(9, 1);
 
-                return Ok(json!({
+                Ok(json!({
                     "data": data_array,
                     "pagination": pagination
                 })
-                .into());
+                .into())
             }
             (_, _, "abc", _) => {
                 let mut res = Response::new(400);
@@ -456,11 +439,11 @@ async fn get_movie_search(req: Request<State>) -> Result {
 
                 let pagination = generate_pagination(12184, 66);
 
-                return Ok(json!({
+                Ok(json!({
                     "data": data_array,
                     "pagination": pagination
                 })
-                .into());
+                .into())
             }
             ("the", "1991", "1", _) => {
                 let data_array = populate_array(
@@ -478,22 +461,22 @@ async fn get_movie_search(req: Request<State>) -> Result {
 
                 let pagination = generate_pagination(46, 1);
 
-                return Ok(json!({
+                Ok(json!({
                     "data": data_array,
                     "pagination": pagination
                 })
-                .into());
+                .into())
             }
             (_, _, "123", _) => {
                 let pagination = generate_pagination(12184, 123);
 
-                return Ok(json!({
+                Ok(json!({
                     "data": [],
                     "pagination": pagination
                 })
-                .into());
+                .into())
             }
-            _ => return Ok(json!({}).into()),
+            _ => Ok(json!({}).into()),
         }
     }
 }
@@ -504,7 +487,7 @@ async fn get_movie_data(req: Request<State>) -> Result {
 
     let a_query_param = query
         .get_key_value("aQueryParam")
-        .and_then(|(_, v)| Some(v.as_str()))
+        .map(|(_, v)| v.as_str())
         .unwrap_or("");
 
     match (path, a_query_param) {
@@ -544,15 +527,15 @@ async fn get_movie_data(req: Request<State>) -> Result {
                 "plot": "The lives of two mob hitmen, a boxer, a gangster and his wife, and a pair of diner bandits intertwine in four tales of violence and redemption."
             });
 
-            return Ok(data.into());
+            Ok(data.into())
         }
-        _ => return Ok(json!({}).into()),
+        _ => Ok(json!({}).into()),
     }
 }
 
 async fn get_person_data(req: Request<State>) -> Result {
     let query = process_query_params(String::from(req.url().query().unwrap_or("")));
-    if query.len() != 0 {
+    if !query.is_empty() {
         return error(400, "Query parameters are not permitted.");
     }
 
@@ -613,7 +596,7 @@ async fn post_user_register(mut req: Request<State>) -> Result {
             }
         };
     } else {
-        return error(400, "Missing username and/or password.");
+        error(400, "Missing username and/or password.")
     }
 }
 
@@ -651,10 +634,10 @@ async fn post_user_login(mut req: Request<State>) -> Result {
             })
             .into())
         } else {
-            return error(401, "No account with those creds exist my guy.");
+            error(401, "No account with those creds exist my guy.")
         }
     } else {
-        return error(400, "Missing username and/or password.");
+        error(400, "Missing username and/or password.")
     }
 }
 
@@ -676,12 +659,12 @@ async fn get_user_profile(req: Request<State>) -> Result {
             }
         }
 
-        return Ok(json!({
+        Ok(json!({
             "email": user_data.email,
             "firstName": user_data.first_name,
             "lastName": user_data.last_name,
         })
-        .into());
+        .into())
     } else {
         error(404, "User no do the exist thing.")
     }
